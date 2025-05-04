@@ -41,7 +41,7 @@ fn main() {
     loop {
         // Check for received messages
         while let Ok(message) = rx.try_recv() {
-            println!("{}", message);
+            println!("Received: {}", message);
             print!("> ");
             std::io::stdout().flush().unwrap();
         }
@@ -50,14 +50,25 @@ fn main() {
         input.clear();
         print!("> ");
         std::io::stdout().flush().unwrap();
-        if stdin_reader.read_line(&mut input).is_ok() {
-            let message = input.trim();
-            if !message.is_empty() {
-                if networking::send_message(message, &mut outgoing_stream, &peer_addr) {
-                    println!("You: {}", message);
-                } else {
-                    println!("Failed to send message to {}. Retrying on next send...", peer_addr);
+        match stdin_reader.read_line(&mut input) {
+            Ok(n) if n > 0 => {
+                let message = input.trim();
+                if !message.is_empty() {
+                    println!("Sending: {}", message);
+                    if networking::send_message(message, &mut outgoing_stream, &peer_addr) {
+                        println!("You: {}", message);
+                    } else {
+                        println!("Failed to send message to {}. Retrying on next send...", peer_addr);
+                    }
                 }
+            }
+            Ok(_) => {
+                println!("No input received, exiting...");
+                break;
+            }
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break;
             }
         }
 
