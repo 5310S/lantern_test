@@ -79,17 +79,18 @@ pub fn run_server(addr: String, tx: Sender<String>) {
     }
 }
 
-// Connect to another peer (client role)
-pub fn connect_to_peer(peer_addr: String, tx: Sender<String>) {
+// Connect to another peer (client role) and return the TcpStream
+pub fn connect_to_peer(peer_addr: String, tx: Sender<String>) -> TcpStream {
     loop {
         match TcpStream::connect(&peer_addr) {
             Ok(stream) => {
                 println!("Connected to peer: {}", peer_addr);
-                let tx = tx.clone();
+                let tx_clone = tx.clone();
+                let stream_clone = stream.try_clone().expect("Failed to clone stream");
                 thread::spawn(move || {
-                    handle_outgoing_client(stream, tx);
+                    handle_outgoing_client(stream_clone, tx_clone);
                 });
-                break;
+                return stream;
             }
             Err(e) => {
                 eprintln!("Failed to connect to {}: {}. Retrying in 2 seconds...", peer_addr, e);
@@ -99,18 +100,35 @@ pub fn connect_to_peer(peer_addr: String, tx: Sender<String>) {
     }
 }
 
-// Send a message to all connected peers
-pub fn broadcast_message(message: &str, streams: &mut Vec<TcpStream>) {
+// Send a message to a single TcpStream, reconnecting if necessary
+pub fn send_message(message: &str, stream: &mut Option<TcpStream>, peer_addr: &str) -> bool {
     let message = format!("{}\n", message);
-    streams.retain_mut(|stream| {
-        match stream.write_all(message.as_bytes()) {
-            Ok(()) => {
-                stream.flush().is_ok()
+    
+    // If no stream or stream is invalid, try to reconnect
+    if stream.is_none() || stream.as_ref().unwrap().peer_addr().is_err() {
+        match TcpStream::connect(peer_addr) {
+            Ok(new_stream) => {
+                println!("Reconnected to peer: {}", peer_addr);
+                *stream = Some(new_stream);
             }
             Err(e) => {
-                eprintln!("Failed to send to {}: {}", stream.peer_addr().unwrap(), e);
+                eprintln!("Failed to reconnect to {}: {}", peer_addr, e);
+                return false;
+            }
+        }
+    }
+
+    // Send the message
+    if let Some(inner_stream) = stream {
+        match inner_stream.write_all(message.as_bytes()) {
+            Ok(()) => inner_stream.flush().is_ok(),
+            Err(e) => {
+                eprintln!("Failed to send to {}: {}", peer_addr, e);
+                *stream = None; // Invalidate stream on error
                 false
             }
         }
-    });
+    } else {
+        false
+    }
 }

@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
 use std::thread;
@@ -20,9 +20,6 @@ fn main() {
 
     // Channel to send received messages to the main thread
     let (tx, rx) = mpsc::channel();
-    
-    // List to keep track of connected streams for broadcasting
-    let mut streams: Vec<TcpStream> = Vec::new();
 
     // Start the server in a separate thread
     let server_tx = tx.clone();
@@ -30,34 +27,37 @@ fn main() {
         networking::run_server(local_addr, server_tx);
     });
 
-    // Connect to the peer (client role)
+    // Connect to the peer (client role) and maintain a single TcpStream
     let client_tx = tx.clone();
-    let peer_addr_for_thread = peer_addr.clone(); // Clone for the thread
-    thread::spawn(move || {
-        networking::connect_to_peer(peer_addr_for_thread, client_tx);
-    });
+    let peer_addr_for_thread = peer_addr.clone();
+    let mut outgoing_stream = Some(networking::connect_to_peer(peer_addr_for_thread, client_tx));
 
     // Main thread: handle user input and display received messages
     let stdin = std::io::stdin();
     let mut stdin_reader = BufReader::new(stdin);
     let mut input = String::new();
 
+    println!("Type a message and press Enter to send. Press Ctrl+C to quit.");
     loop {
         // Check for received messages
         while let Ok(message) = rx.try_recv() {
             println!("{}", message);
+            print!("> ");
+            std::io::stdout().flush().unwrap();
         }
 
-        // Non-blocking read from stdin
+        // Read user input
         input.clear();
+        print!("> ");
+        std::io::stdout().flush().unwrap();
         if stdin_reader.read_line(&mut input).is_ok() {
             let message = input.trim();
             if !message.is_empty() {
-                // Add outgoing stream to the list if connected
-                if let Ok(stream) = TcpStream::connect(&peer_addr) {
-                    streams.push(stream);
+                if networking::send_message(message, &mut outgoing_stream, &peer_addr) {
+                    println!("You: {}", message);
+                } else {
+                    println!("Failed to send message. Retrying on next send...");
                 }
-                networking::broadcast_message(message, &mut streams);
             }
         }
 
