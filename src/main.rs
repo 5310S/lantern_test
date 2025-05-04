@@ -56,7 +56,7 @@ fn main() {
                 if networking::send_message(message, &mut outgoing_stream, &peer_addr) {
                     println!("You: {}", message);
                 } else {
-                    println!("Failed to send message. Retrying on next send...");
+                    println!("Failed to send message to {}. Retrying on next send...", peer_addr);
                 }
             }
         }

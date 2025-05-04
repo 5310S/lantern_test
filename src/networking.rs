@@ -17,10 +17,11 @@ pub fn handle_incoming_client(mut stream: TcpStream, tx: Sender<String>) {
                 println!("Connection closed by peer: {}", peer_addr);
                 break;
             }
-            Ok(_) => {
+            Ok(n) => {
                 let message = buffer.trim();
                 if !message.is_empty() {
                     let formatted = format!("From {}: {}", peer_addr, message);
+                    println!("Received from {}: {} ({} bytes)", peer_addr, message, n);
                     tx.send(formatted).expect("Failed to send message to main thread");
                 }
             }
@@ -33,8 +34,8 @@ pub fn handle_incoming_client(mut stream: TcpStream, tx: Sender<String>) {
 }
 
 // Handle the outgoing connection (client role)
-pub fn handle_outgoing_client(mut stream: TcpStream, tx: Sender<String>) {
-    let peer_addr = stream.peer_addr().unwrap();
+pub fn handle_outgoing_client(mut stream: TcpStream, tx: Sender<String>, peer_addr: String) {
+    let peer_addr_display = stream.peer_addr().unwrap();
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut buffer = String::new();
 
@@ -42,18 +43,32 @@ pub fn handle_outgoing_client(mut stream: TcpStream, tx: Sender<String>) {
         buffer.clear();
         match reader.read_line(&mut buffer) {
             Ok(0) => {
-                println!("Connection closed by peer: {}", peer_addr);
-                break;
+                println!("Connection closed by peer: {}", peer_addr_display);
+                // Attempt to reconnect
+                match TcpStream::connect(&peer_addr) {
+                    Ok(new_stream) => {
+                        println!("Reconnected to peer: {}", peer_addr);
+                        stream = new_stream;
+                        reader = BufReader::new(stream.try_clone().unwrap());
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to reconnect to {}: {}. Retrying in 2 seconds...", peer_addr, e);
+                        thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                }
             }
-            Ok(_) => {
+            Ok(n) => {
                 let message = buffer.trim();
                 if !message.is_empty() {
-                    let formatted = format!("From {}: {}", peer_addr, message);
+                    let formatted = format!("From {}: {}", peer_addr_display, message);
+                    println!("Received from {}: {} ({} bytes)", peer_addr_display, message, n);
                     tx.send(formatted).expect("Failed to send message to main thread");
                 }
             }
             Err(e) => {
-                eprintln!("Error reading from {}: {}", peer_addr, e);
+                eprintln!("Error reading from {}: {}", peer_addr_display, e);
                 break;
             }
         }
@@ -86,9 +101,10 @@ pub fn connect_to_peer(peer_addr: String, tx: Sender<String>) -> TcpStream {
             Ok(stream) => {
                 println!("Connected to peer: {}", peer_addr);
                 let tx_clone = tx.clone();
+                let peer_addr_clone = peer_addr.clone();
                 let stream_clone = stream.try_clone().expect("Failed to clone stream");
                 thread::spawn(move || {
-                    handle_outgoing_client(stream_clone, tx_clone);
+                    handle_outgoing_client(stream_clone, tx_clone, peer_addr_clone);
                 });
                 return stream;
             }
@@ -121,7 +137,13 @@ pub fn send_message(message: &str, stream: &mut Option<TcpStream>, peer_addr: &s
     // Send the message
     if let Some(inner_stream) = stream {
         match inner_stream.write_all(message.as_bytes()) {
-            Ok(()) => inner_stream.flush().is_ok(),
+            Ok(()) => {
+                let success = inner_stream.flush().is_ok();
+                if success {
+                    println!("Sent to {}: {}", peer_addr, message.trim());
+                }
+                success
+            }
             Err(e) => {
                 eprintln!("Failed to send to {}: {}", peer_addr, e);
                 *stream = None; // Invalidate stream on error
